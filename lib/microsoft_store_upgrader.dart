@@ -2,14 +2,10 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:upgrader/upgrader.dart';
 import 'package:version/version.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 
 /// Thin wrapper around our Windows host methods.
 class _WinStoreApi {
   static const _ch = MethodChannel('dev.centroid.upgrader_windows_store');
-
-  static Future<bool> hasUpdate() async =>
-      (await _ch.invokeMethod<bool>('hasUpdate')) ?? false;
 
   static Future<bool> installUpdate() async =>
       (await _ch.invokeMethod<bool>('installUpdate')) ?? false;
@@ -27,8 +23,8 @@ class _WinStoreApi {
     return const {};
   }
 
-  static Future<void> openStorePdp(String productId) async {
-    await _ch.invokeMethod('openStorePdp', {'productId': productId});
+  static Future<void> openStore(String productId) async {
+    await _ch.invokeMethod('openStore', {'productId': productId});
   }
 }
 
@@ -40,7 +36,7 @@ class _WinStoreApi {
 class UpgraderWindowsStore extends UpgraderStore {
   final String? productId;
 
-  const UpgraderWindowsStore({this.productId});
+  UpgraderWindowsStore({this.productId});
 
   @override
   Future<UpgraderVersionInfo> getVersionInfo({
@@ -66,30 +62,14 @@ class UpgraderWindowsStore extends UpgraderStore {
       appStoreVersion: appStoreVersion,
       installedVersion: installedVersion,
       releaseNotes: info['releaseNotes'] as String?, // usually null on Windows
-      // If you want a forced-min version, pass it via Upgrader(minAppVersion:).
-      minAppVersion:
-          state.minAppVersion != null ? Version.parse(state.minAppVersion!) : null,
-      // isCriticalUpdate can be derived if you have your own signal.
-      isCriticalUpdate: null,
+      isCriticalUpdate: null, // todo
     );
   }
 
   /// Optional helper your UI can call for one-click in-app update.
   static Future<bool> installUpdate() => _WinStoreApi.installUpdate();
 
-  /// Optional helper to open the PDP explicitly.
-  static Future<void> openPdp(String productId) =>
-      _WinStoreApi.openStorePdp(productId);
-}
-
-/// Convenience to wire into Upgrader on Windows.
-UpgraderStoreController windowsStoreController({String? productId}) =>
-    UpgraderStoreController(
-      onWindows: () => UpgraderWindowsStore(productId: productId),
-    );
-
-/// Utility to fetch the installed app version as a Version object.
-Future<Version> getInstalledVersion() async {
-  final pkg = await PackageInfo.fromPlatform();
-  return Version.parse(pkg.version);
+  /// Optional helper to open the store explicitly.
+  static Future<void> openStore(String productId) =>
+      _WinStoreApi.openStore(productId);
 }

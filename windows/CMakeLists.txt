@@ -3,6 +3,7 @@
 # version, as doing so will cause the plugin to fail to compile for some
 # customers of the plugin.
 cmake_minimum_required(VERSION 3.14)
+set(CMAKE_CXX_STANDARD 20)
 
 # Project-level configuration.
 set(PROJECT_NAME "microsoft_store_upgrader")
@@ -37,13 +38,13 @@ apply_standard_settings(${PLUGIN_NAME})
 # exported should be explicitly exported with the FLUTTER_PLUGIN_EXPORT macro.
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   CXX_VISIBILITY_PRESET hidden)
-target_compile_definitions(${PLUGIN_NAME} PRIVATE FLUTTER_PLUGIN_IMPL)
+target_compile_definitions(${PLUGIN_NAME} PRIVATE MICROSOFT_STORE_UPGRADER_PLUGIN_IMPL FLUTTER_PLUGIN_IMPL)
 
 # Source include directories and library dependencies. Add any plugin-specific
 # dependencies here.
 target_include_directories(${PLUGIN_NAME} INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/include")
-target_link_libraries(${PLUGIN_NAME} PRIVATE flutter flutter_wrapper_plugin)
+target_link_libraries(${PLUGIN_NAME} PRIVATE flutter flutter_wrapper_plugin WindowsApp Shell32)
 
 # List of absolute paths to libraries that should be bundled with the plugin.
 # This list could contain prebuilt libraries, or libraries created by an

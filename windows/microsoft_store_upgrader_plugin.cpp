@@ -1,3 +1,5 @@
+#include "include/microsoft_store_upgrader/microsoft_store_upgrader_plugin.h"
+
 #include "flutter/method_channel.h"
 #include "flutter/plugin_registrar_windows.h"
 #include "flutter/standard_method_codec.h"
@@ -48,17 +50,12 @@ class UpgraderWindowsStorePlugin : public std::enable_shared_from_this<UpgraderW
     try {
       const auto& method = call.method_name();
 
-      if (method == "hasUpdate") {
-        RunCheckUpdates(std::move(result));
-        return;
-      }
-
       if (method == "installUpdate") {
         RunInstallUpdates(std::move(result));
         return;
       }
 
-      if (method == "openStorePdp") {
+      if (method == "openStore") {
         std::wstring productId;
         if (const auto* map = std::get_if<EncodableMap>(call.arguments())) {
           if (auto it = map->find(EncodableValue("productId")); it != map->end()) {
@@ -92,31 +89,6 @@ class UpgraderWindowsStorePlugin : public std::enable_shared_from_this<UpgraderW
   }
 
   // --- async helpers (coroutines) ---
-
-  void RunCheckUpdates(std::unique_ptr<flutter::MethodResult<EncodableValue>> result) {
-    auto self = shared_from_this();
-    auto task = [self, result = std::move(result)]() mutable -> winrt::fire_and_forget {
-      winrt::apartment_context ui;
-      bool value = false;
-      bool hadError = false;
-      std::string err;
-
-      try {
-        StoreContext ctx = StoreContext::GetDefault();
-        auto updates = co_await ctx.GetAppAndOptionalStorePackageUpdatesAsync();
-        value = updates.Size() > 0;
-      } catch (const winrt::hresult_error& e) {
-        hadError = true; err = winrt::to_string(e.message());
-      } catch (...) {
-        hadError = true; err = "Unexpected failure";
-      }
-
-      co_await ui;
-      if (hadError) { result->Error("winrt_error", err); co_return; }
-      result->Success(EncodableValue(value));
-    };
-    task();
-  }
 
   void RunInstallUpdates(std::unique_ptr<flutter::MethodResult<EncodableValue>> result) {
     auto self = shared_from_this();
