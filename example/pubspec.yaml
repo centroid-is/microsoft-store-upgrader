@@ -12,6 +12,7 @@ dependencies:
     sdk: flutter
   microsoft_store_upgrader:
     path: ../
+  upgrader: ^11.5.1
 
 flutter:
   uses-material-design: true

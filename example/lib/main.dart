@@ -1,7 +1,26 @@
 import 'package:flutter/material.dart';
+import 'package:upgrader/upgrader.dart';
+import 'package:microsoft_store_upgrader/microsoft_store_upgrader.dart';
 
-void main() {
-  runApp(const MyApp());
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  final upgrader = Upgrader(
+    storeController: UpgraderStoreController(onWindows: () => UpgraderWindowsStore(productId: '9N1C64WM15R1'),),
+    debugLogging: true,
+  );
+
+  runApp(MaterialApp(
+    home: UpgradeAlert(
+      upgrader: upgrader,
+      onUpdate: () {
+        print("foo");
+        UpgraderWindowsStore.installUpdate();
+        return false; // <- prevent UpgradeAlert's default action
+      },
+      child: const MyApp(),
+    ),
+  ));
 }
 
 class MyApp extends StatelessWidget {

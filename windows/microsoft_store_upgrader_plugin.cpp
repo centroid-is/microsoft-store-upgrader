@@ -16,6 +16,7 @@
 #include <winrt/Windows.Services.Store.h>
 #include <winrt/Windows.ApplicationModel.h>
 #include <shellapi.h>
+#include <appmodel.h>
 
 namespace {
 
@@ -28,28 +29,40 @@ using winrt::Windows::Services::Store::StorePackageUpdateState;
 using winrt::Windows::Services::Store::StoreProductResult;
 using winrt::Windows::ApplicationModel::Package;
 
-class UpgraderWindowsStorePlugin : public std::enable_shared_from_this<UpgraderWindowsStorePlugin> {
+static bool IsPackaged() {
+  UINT32 len = 0;
+  LONG rc = GetCurrentPackageFullName(&len, nullptr);
+  return rc != APPMODEL_ERROR_NO_PACKAGE; // unpackaged => 15700
+}
+
+class MicrosoftStoreUpgraderPlugin : public flutter::Plugin {
  public:
-  static void RegisterWithRegistrar(flutter::PluginRegistrarWindows *registrar) {
-    auto channel = std::make_shared<flutter::MethodChannel<EncodableValue>>(
-        registrar->messenger(), "dev.centroid.upgrader_windows_store",
+  static void RegisterWithRegistrar(flutter::PluginRegistrarWindows* registrar) {
+    auto plugin = std::make_unique<MicrosoftStoreUpgraderPlugin>();
+
+    plugin->channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+        registrar->messenger(),
+        "dev.centroid.upgrader_windows_store",
         &flutter::StandardMethodCodec::GetInstance());
 
-    auto plugin = std::make_shared<UpgraderWindowsStorePlugin>();
-    channel->SetMethodCallHandler(
-        [plugin](const auto& call, auto result) { plugin->OnMethodCall(call, std::move(result)); });
+    plugin->channel_->SetMethodCallHandler(
+      [p = plugin.get()](auto const& call, auto result) {
+        p->OnMethodCall(call, std::move(result));
+      });
+
+    registrar->AddPlugin(std::move(plugin)); // registrar owns lifetime till shutdown
   }
 
-  UpgraderWindowsStorePlugin() {
+  MicrosoftStoreUpgraderPlugin() {
     winrt::init_apartment(winrt::apartment_type::single_threaded);
   }
+  ~MicrosoftStoreUpgraderPlugin() {}
 
  private:
   void OnMethodCall(const flutter::MethodCall<EncodableValue>& call,
                     std::unique_ptr<flutter::MethodResult<EncodableValue>> result) {
     try {
       const auto& method = call.method_name();
-
       if (method == "installUpdate") {
         RunInstallUpdates(std::move(result));
         return;
@@ -88,95 +101,97 @@ class UpgraderWindowsStorePlugin : public std::enable_shared_from_this<UpgraderW
     }
   }
 
-  // --- async helpers (coroutines) ---
-
   void RunInstallUpdates(std::unique_ptr<flutter::MethodResult<EncodableValue>> result) {
-    auto self = shared_from_this();
-    auto task = [self, result = std::move(result)]() mutable -> winrt::fire_and_forget {
-      winrt::apartment_context ui;
-      bool ok = false;
-      bool hadError = false;
-      std::string err;
-
-      try {
-        StoreContext ctx = StoreContext::GetDefault();
-        auto updates = co_await ctx.GetAppAndOptionalStorePackageUpdatesAsync();
-        if (updates.Size() > 0) {
-          co_await ui; // must be on UI for request dialog
-          StorePackageUpdateResult r =
-              co_await ctx.RequestDownloadAndInstallStorePackageUpdatesAsync(updates);
-          ok = (r.OverallState() == StorePackageUpdateState::Completed);
-        }
-      } catch (const winrt::hresult_error& e) {
-        hadError = true; err = winrt::to_string(e.message());
-      } catch (...) {
-        hadError = true; err = "Unexpected failure";
+    try {
+      if (!IsPackaged()) {
+        result->Error("not_packaged", "MSIX/Appx packaging required for StoreContext.");
+        return;
       }
 
-      co_await ui;
-      if (hadError) { result->Error("winrt_error", err); co_return; }
+      using winrt::Windows::Foundation::Collections::IVectorView;
+      using winrt::Windows::Services::Store::StoreContext;
+      using winrt::Windows::Services::Store::StorePackageUpdate;
+      using winrt::Windows::Services::Store::StorePackageUpdateResult;
+      using winrt::Windows::Services::Store::StorePackageUpdateState;
+
+      StoreContext ctx = StoreContext::GetDefault();
+
+      // Block until we have the list of updates.
+      IVectorView<StorePackageUpdate> updates =
+          ctx.GetAppAndOptionalStorePackageUpdatesAsync().get();
+
+      bool ok = false;
+      if (updates && updates.Size() > 0) {
+        // This will block until the Store UI finishes (user consent + install).
+        StorePackageUpdateResult r =
+            ctx.RequestDownloadAndInstallStorePackageUpdatesAsync(updates).get();
+        ok = (r.OverallState() == StorePackageUpdateState::Completed);
+      }
+
       result->Success(EncodableValue(ok));
-    };
-    task();
+    } catch (const winrt::hresult_error& e) {
+      result->Error("winrt_error", winrt::to_string(e.message()));
+    } catch (...) {
+      result->Error("unknown_error", "Unexpected failure");
+    }
   }
 
   void RunGetStoreInfo(std::unique_ptr<flutter::MethodResult<EncodableValue>> result) {
-    auto self = shared_from_this();
-    auto task = [self, result = std::move(result)]() mutable -> winrt::fire_and_forget {
-      winrt::apartment_context ui;
-
-      // Defaults
-      std::string listingUrl;
-      std::string latestVersion; // x.y.z.w if an update is known
-
-      bool hadError = false;
-      std::string err;
-
-      try {
-        StoreContext ctx = StoreContext::GetDefault();
-
-        // Listing URL via StoreProduct.LinkUri
-        StoreProductResult prod = co_await ctx.GetStoreProductForCurrentAppAsync();
-        if (prod.Product() && prod.Product().LinkUri()) {
-          auto uri = prod.Product().LinkUri().RawUri();
-          listingUrl = winrt::to_string(uri);
-        }
-        // If updates exist, report the target version.
-        auto updates = co_await ctx.GetAppAndOptionalStorePackageUpdatesAsync();
-        if (updates.Size() > 0) {
-          // Use version of the first updated package.
-          auto pkg = updates.GetAt(0).Package(); // StorePackageUpdate.Package
-          auto v = pkg.Id().Version();           // PackageVersion {Major, Minor, Build, Revision}
-          latestVersion =
-              std::to_string(v.Major) + "." + std::to_string(v.Minor) + "." +
-              std::to_string(v.Build) + "." + std::to_string(v.Revision);
-        }
-      } catch (const winrt::hresult_error& e) {
-        hadError = true; err = winrt::to_string(e.message());
-      } catch (...) {
-        hadError = true; err = "Unexpected failure";
+    try {
+      if (!IsPackaged()) {
+        result->Error("not_packaged", "MSIX/Appx packaging required for StoreContext.");
+        return;
       }
 
-      co_await ui;
-      if (hadError) { result->Error("winrt_error", err); co_return; }
+      using winrt::Windows::Foundation::Collections::IVectorView;
+      using winrt::Windows::Services::Store::StoreContext;
+      using winrt::Windows::Services::Store::StorePackageUpdate;
+      using winrt::Windows::Services::Store::StoreProductResult;
+
+      StoreContext ctx = StoreContext::GetDefault();
+
+      // Listing URL
+      std::string listingUrl;
+      StoreProductResult prod = ctx.GetStoreProductForCurrentAppAsync().get();
+      if (prod && prod.Product() && prod.Product().LinkUri()) {
+        listingUrl = winrt::to_string(prod.Product().LinkUri().RawUri());
+      }
+
+      // Latest version (if any updates exist)
+      std::string latestVersion;
+      IVectorView<StorePackageUpdate> updates =
+          ctx.GetAppAndOptionalStorePackageUpdatesAsync().get();
+      if (updates && updates.Size() > 0) {
+        auto v = updates.GetAt(0).Package().Id().Version();
+        latestVersion = std::to_string(v.Major) + "." + std::to_string(v.Minor) + "." +
+                        std::to_string(v.Build) + "." + std::to_string(v.Revision);
+      }
 
       EncodableMap map;
-      if (!listingUrl.empty()) map[EncodableValue("listingUrl")] = EncodableValue(listingUrl);
-      if (!latestVersion.empty()) map[EncodableValue("latestVersion")] = EncodableValue(latestVersion);
-      // Windows Store doesn’t expose release notes via this API.
+      if (!listingUrl.empty())
+        map[EncodableValue("listingUrl")] = EncodableValue(listingUrl);
+      if (!latestVersion.empty())
+        map[EncodableValue("latestVersion")] = EncodableValue(latestVersion);
+      // Windows Store API doesn’t expose release notes here.
       map[EncodableValue("releaseNotes")] = EncodableValue();
 
-      result->Success(EncodableValue(map));
-    };
-    task();
+      result->Success(EncodableValue(std::move(map)));
+    } catch (const winrt::hresult_error& e) {
+      result->Error("winrt_error", winrt::to_string(e.message()));
+    } catch (...) {
+      result->Error("unknown_error", "Unexpected failure");
+    }
   }
+
+  private:
+    std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel_;
 };
 
 }  // namespace
 
-void UpgraderWindowsStorePluginRegisterWithRegistrar(
+void MicrosoftStoreUpgraderPluginRegisterWithRegistrar(
     FlutterDesktopPluginRegistrarRef registrar) {
-  UpgraderWindowsStorePlugin::RegisterWithRegistrar(
+  MicrosoftStoreUpgraderPlugin::RegisterWithRegistrar(
       flutter::PluginRegistrarManager::GetInstance()
           ->GetRegistrar<flutter::PluginRegistrarWindows>(registrar));
 }

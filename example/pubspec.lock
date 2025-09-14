@@ -304,7 +304,7 @@ packages:
     source: hosted
     version: "1.4.0"
   upgrader:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: upgrader
       sha256: "6997d84f49120d6179f6d839a87f0d9595b50641d17e058d8e0fc5f4bdf673fe"
